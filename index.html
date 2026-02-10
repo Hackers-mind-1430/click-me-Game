@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Click Game</title>
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            background: linear-gradient(120deg, #f8e8ee 0%, #e0f7fa 100%);
+            font-family: 'Segoe UI', Arial, sans-serif;
+            color: #333;
+            overflow: hidden;
+        }
+        .play-area {
+            position: fixed;
+            inset: 0;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        .hint {
+            position: absolute;
+            top: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #fff8;
+            color: #444;
+            font-size: 16px;
+            padding: 10px 22px;
+            border-radius: 999px;
+            box-shadow: 0 2px 12px #0002;
+            z-index: 2;
+            pointer-events: none;
+            user-select: none; /* prevent selecting the level text */
+            -webkit-user-select: none;
+        }
+        #gameButton {
+            padding: 26px 60px;
+            font-size: 32px;
+            border: none;
+            border-radius: 18px;
+            cursor: pointer;
+            color: #fff;
+            background: linear-gradient(135deg, #ffb6b9 0%, #8fd3f4 100%);
+            box-shadow: 0 8px 32px #0002;
+            transition: left 0.28s cubic-bezier(.2,.9,.3,1), top 0.28s cubic-bezier(.2,.9,.3,1), transform 0.18s ease, box-shadow 0.18s ease;
+            position: absolute;
+            user-select: none;
+            outline: none;
+            letter-spacing: 0.7px;
+            animation: bounceIn 0.7s;
+            will-change: left, top, transform;
+        }
+        #gameButton:active { transform: scale(0.96); }
+        #gameButton:focus { outline: none; box-shadow: 0 0 0 6px #8fd3f488; }
+        /* subtle floating when idle */
+        #gameButton.floating {
+            animation: floaty 3.6s ease-in-out infinite;
+        }
+        @keyframes floaty {
+            0% { transform: translateY(0) scale(1); }
+            50% { transform: translateY(-6px) scale(1.01); }
+            100% { transform: translateY(0) scale(1); }
+        }
+        .footer-note {
+            position: absolute;
+            bottom: 18px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 13px;
+            color: #5558;
+            pointer-events: none;
+            user-select: none; /* prevent selecting the footer text */
+            -webkit-user-select: none;
+        }
+        @keyframes bounceIn {
+            0% { transform: scale(0.7); opacity: 0; }
+            60% { transform: scale(1.15); opacity: 1; }
+            80% { transform: scale(0.95); }
+            100% { transform: scale(1); }
+        }
+        /* praise + confetti */
+        .praise-overlay {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            z-index: 1200;
+        }
+        .praise-text {
+            font-size: 72px;
+            font-weight: 900;
+            color: #fff;
+            text-shadow: 0 6px 30px rgba(0,0,0,0.45), 0 0 20px #ff6b9a55;
+            transform: scale(0.2);
+            opacity: 0;
+            transition: transform 420ms cubic-bezier(.2,.9,.3,1), opacity 420ms;
+            user-select: none;
+        }
+        .praise-text.show {
+            transform: scale(1);
+            opacity: 1;
+        }
+        .confetti {
+            position: absolute;
+            width: 10px;
+            height: 14px;
+            border-radius: 2px;
+            opacity: 0.95;
+            transform-origin: center;
+            animation: confetti-drop 1400ms linear forwards;
+            will-change: transform, left, top, opacity;
+        }
+        @keyframes confetti-drop {
+            0% { transform: translateY(0) rotate(0deg); opacity: 1; }
+            70% { opacity: 1; }
+            100% { transform: translateY(600px) rotate(540deg); opacity: 0; }
+        }
+
+        @media (max-width:720px) {
+            #gameButton { font-size: 22px; padding: 16px 34px; }
+            .hint { font-size: 13px; top: 12px; }
+            .praise-text { font-size: 36px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="play-area">
+        <div class="hint" id="hint">Level: Beginner — click the button</div>
+        <button id="gameButton" aria-label="Click Me">Click Me</button>
+        <div class="footer-note">Clicks change the colors • Try not to get clicked</div>
+    </div>
+    <script>
+        const button = document.getElementById('gameButton');
+        const hint = document.getElementById('hint');
+        let level = 0; // 0: Beginner, 1: Intermediate, 2: Advanced, 3: God
+        let clickLocked = false;
+
+        let intermediateThreshold = 120;
+        let advancedThreshold = 220;
+        let intermediateInterval = null;
+        let advancedJitterInterval = null;
+        let godLevelInterval = null;
+        let advancedPointerHandler = null;
+        let godPointerHandler = null; // used for God-level pointerdown that changes bg
+
+        // ensure button starts centered and has floating animation
+        function centerButtonInstant() {
+            button.style.position = 'absolute';
+            const cx = (window.innerWidth - button.offsetWidth) / 2;
+            const cy = (window.innerHeight - button.offsetHeight) / 2;
+            button.style.left = (Math.round(cx)) + 'px';
+            button.style.top = (Math.round(cy)) + 'px';
+            button.classList.add('floating');
+        }
+        // initial center
+        setTimeout(centerButtonInstant, 40);
+
+        button.addEventListener('pointerdown', e => { e.preventDefault(); }, { passive: false });
+
+        function changeBackgroundColor() {
+            const h = Math.floor(Math.random() * 360);
+            document.body.style.background = `linear-gradient(120deg, hsl(${h}, 80%, 95%) 0%, hsl(${(h+60)%360}, 70%, 90%) 100%)`;
+        }
+        function changeButtonColor() {
+            const h1 = Math.floor(Math.random()*360);
+            const h2 = (h1 + 60 + Math.floor(Math.random()*120)) % 360;
+            button.style.background = `linear-gradient(135deg, hsl(${h1}, 85%, 68%), hsl(${h2}, 78%, 61%))`;
+            // gentle pop
+            button.animate([
+                { transform: 'scale(1)' },
+                { transform: 'scale(1.06)' },
+                { transform: 'scale(1)' }
+            ], { duration: 380, easing: 'cubic-bezier(.2,.9,.3,1)' });
+        }
+        function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+        function placeButtonAt(x, y, instant = false, transitionMs = 280) {
+            button.style.position = 'absolute';
+            // keep transitions smooth; only instant true => immediate jump
+            if (instant) {
+                button.style.transition = 'none';
+            } else {
+                button.style.transition = `left ${transitionMs}ms cubic-bezier(.2,.9,.3,1), top ${transitionMs}ms cubic-bezier(.2,.9,.3,1), transform 120ms`;
+            }
+            const padding = 12;
+            const maxX = window.innerWidth - button.offsetWidth - padding;
+            const maxY = window.innerHeight - button.offsetHeight - padding;
+            const nx = clamp(Math.round(x), padding, Math.max(padding, maxX));
+            const ny = clamp(Math.round(y), padding, Math.max(padding, maxY));
+            // apply position
+            if (instant) {
+                // force layout then set (no transition)
+                button.style.left = nx + 'px';
+                button.style.top = ny + 'px';
+                // restore transitions shortly after to keep animations for next moves
+                setTimeout(() => {
+                    button.style.transition = `left ${transitionMs}ms cubic-bezier(.2,.9,.3,1), top ${transitionMs}ms cubic-bezier(.2,.9,.3,1), transform 120ms`;
+                }, 20);
+            } else {
+                button.style.left = nx + 'px';
+                button.style.top = ny + 'px';
+            }
+            // subtle pop on movement
+            button.animate([
+                { transform: 'translateY(0) scale(1)', boxShadow: '0 8px 28px rgba(0,0,0,0.12)' },
+                { transform: 'translateY(-4px) scale(1.02)', boxShadow: '0 12px 40px rgba(0,0,0,0.18)' },
+                { transform: 'translateY(0) scale(1)', boxShadow: '0 8px 28px rgba(0,0,0,0.12)' }
+            ], { duration: 320, easing: 'cubic-bezier(.2,.9,.3,1)' });
+            // ensure floating class present for subtle idle motion
+            button.classList.add('floating');
+        }
+        function randomOnScreen(margin = 20) {
+            const x = Math.random() * (window.innerWidth - button.offsetWidth - margin*2) + margin;
+            const y = Math.random() * (window.innerHeight - button.offsetHeight - margin*2) + margin;
+            return {x,y};
+        }
+        function moveAwayFrom(px, py, aggression = 1) {
+            const rect = button.getBoundingClientRect();
+            const bx = rect.left + rect.width/2;
+            const by = rect.top + rect.height/2;
+            let vx = bx - px;
+            let vy = by - py;
+            const dist = Math.hypot(vx, vy) || 1;
+            // stronger aggression => bigger jump, but we keep it smooth (no teleport)
+            const baseDistance = 140 + 220 * clamp(aggression, 0, 2);
+            vx = (vx / dist) * (baseDistance) + (Math.random()-0.5) * 80;
+            vy = (vy / dist) * (baseDistance * 0.6) + (Math.random()-0.5) * 60;
+            const nx = bx + vx - rect.width/2;
+            const ny = by + vy - rect.height/2;
+            // smooth placement
+            placeButtonAt(nx, ny, false, aggression > 1.2 ? 180 : 260);
+        }
+
+        // pointer handling with RAF throttle - more reliable than raw mousemove
+        let lastPointer = null;
+        let rafPending = false;
+        function onDocumentPointerMove(e) {
+            lastPointer = e;
+            if (!rafPending) {
+                rafPending = true;
+                requestAnimationFrame(() => {
+                    handlePointerMove(lastPointer);
+                    rafPending = false;
+                });
+            }
+        }
+        function handlePointerMove(e) {
+            if (!e) return;
+            // don't react if clicking the button
+            if (clickLocked) return;
+            const rect = button.getBoundingClientRect();
+            const bx = rect.left + rect.width/2;
+            const by = rect.top + rect.height/2;
+            const dist = Math.hypot(e.clientX - bx, e.clientY - by);
+            if (level === 1) {
+                if (dist < intermediateThreshold) {
+                    // moderate avoidance
+                    moveAwayFrom(e.clientX, e.clientY, 0.9);
+                }
+            } else if (level === 2) {
+                if (dist < advancedThreshold) {
+                    const aggression = 1.6 + Math.random()*1.3;
+                    moveAwayFrom(e.clientX, e.clientY, aggression);
+                } else if (Math.random() < 0.01) {
+                    // small smooth nudge occasionally
+                    const nudge = randomOnScreen(40);
+                    placeButtonAt(nudge.x, nudge.y, false, 220);
+                }
+            } else if (level === 3) {
+                // God level: very evasive but smooth
+                if (dist < 340) {
+                    const {x,y} = randomOnScreen(20);
+                    placeButtonAt(x,y, false, 180);
+                }
+            }
+        }
+
+        function onMouseMoveIntermediate(e) { /* kept for compatibility if needed */ }
+        function onMouseMoveAdvanced(e) { /* kept for compatibility if needed */ }
+
+        function startIntermediate() {
+            hint.textContent = 'Level: Intermediate — Getting tougher!';
+            // main pointer listener
+            document.addEventListener('pointermove', onDocumentPointerMove);
+
+            // Move button randomly every few seconds (smooth)
+            intermediateInterval = setInterval(() => {
+                const {x,y} = randomOnScreen(20);
+                placeButtonAt(x,y, false, 320);
+            }, 2200);
+
+            return intermediateInterval;
+        }
+
+        function stopAdvanced() {
+            if (advancedJitterInterval) {
+                clearInterval(advancedJitterInterval);
+                advancedJitterInterval = null;
+            }
+            if (advancedPointerHandler) {
+                document.removeEventListener('pointermove', advancedPointerHandler);
+                advancedPointerHandler = null;
+            }
+            // leave main pointer listener (onDocumentPointerMove) attached only when needed by level; calling contexts remove it as necessary
+        }
+
+        function startAdvanced() {
+            hint.textContent = 'Level: Advanced — Good luck catching me!';
+            // ensure main pointer listener active
+            document.addEventListener('pointermove', onDocumentPointerMove);
+
+            // Aggressive jitter, smooth movements (no teleport)
+            advancedJitterInterval = setInterval(() => {
+                if (Math.random() < 0.9) {
+                    const {x,y} = randomOnScreen(10);
+                    placeButtonAt(x,y, false, 160);
+                }
+            }, 560);
+        }
+
+        function startGodLevel() {
+            hint.textContent = '⚡ GOD LEVEL ⚡';
+            hint.style.background = '#ff3366aa';
+            hint.style.color = '#fff';
+            hint.style.fontWeight = 'bold';
+            hint.style.textShadow = '0 0 10px #fff';
+            button.textContent = 'DIVINE CLICK';
+
+            // Stop previous advanced behaviors
+            stopAdvanced();
+            document.addEventListener('pointermove', onDocumentPointerMove);
+
+            // Enhanced background effect for God mode
+            godPointerHandler = (e) => {
+                if (e.isPrimary === false) return;
+                
+                // Create more vibrant and divine-like colors
+                const hue1 = Math.floor(Math.random() * 360);
+                const hue2 = (hue1 + 180) % 360; // Complementary color
+                const hue3 = (hue1 + 60) % 360;  // Triadic color
+                
+                // Create a complex gradient with multiple color stops
+                document.body.style.background = `
+                    linear-gradient(
+                        135deg,
+                        hsl(${hue1}, 85%, 92%) 0%,
+                        hsl(${hue2}, 70%, 85%) 50%,
+                        hsl(${hue3}, 80%, 90%) 100%
+                    )
+                `;
+                
+                // Add a subtle flash effect
+                const flash = document.createElement('div');
+                flash.style.cssText = `
+                    position: fixed;
+                    inset: 0;
+                    background: white;
+                    opacity: 0.4;
+                    pointer-events: none;
+                    z-index: 1000;
+                `;
+                document.body.appendChild(flash);
+                
+                // Animate flash fade-out
+                flash.animate(
+                    [
+                        { opacity: 0.4 },
+                        { opacity: 0 }
+                    ],
+                    {
+                        duration: 600,
+                        easing: 'cubic-bezier(0.4, 0, 0.2, 1)'
+                    }
+                ).onfinish = () => flash.remove();
+
+                // Smooth transition for background
+                document.body.style.transition = 'background 0.6s cubic-bezier(0.4, 0, 0.2, 1)';
+            };
+            
+            document.addEventListener('pointerdown', godPointerHandler);
+
+            // Constant movement but smooth
+            return setInterval(() => {
+                const {x,y} = randomOnScreen(15);
+                placeButtonAt(x,y, false, 240);
+            }, 420);
+        }
+
+        function showPraise() {
+            // create overlay
+            const overlay = document.createElement('div');
+            overlay.className = 'praise-overlay';
+            const text = document.createElement('div');
+            text.className = 'praise-text';
+            text.textContent = 'DIVINE MASTERY!';
+            overlay.appendChild(text);
+            document.body.appendChild(overlay);
+
+            // create confetti pieces
+            const colors = ['#ff6b9a','#ffd166','#8fd3f4','#a0e7a0','#c088ff'];
+            const count = 32;
+            for (let i=0;i<count;i++) {
+                const c = document.createElement('div');
+                c.className = 'confetti';
+                c.style.background = colors[i % colors.length];
+                // random start position across width
+                const startLeft = Math.random() * window.innerWidth;
+                c.style.left = startLeft + 'px';
+                c.style.top = (window.innerHeight * 0.18 + Math.random()*40) + 'px';
+                // stagger animation durations & delay
+                c.style.animationDuration = (1100 + Math.random()*700) + 'ms';
+                c.style.transform = `rotate(${Math.random()*360}deg)`;
+                overlay.appendChild(c);
+            }
+
+            // show text after tiny delay
+            setTimeout(() => {
+                text.classList.add('show');
+            }, 40);
+
+            // remove overlay after time
+            setTimeout(() => {
+                text.classList.remove('show');
+                overlay.remove();
+            }, 2600);
+        }
+
+        function lockClicks(ms) {
+            clickLocked = true;
+            setTimeout(() => clickLocked = false, ms);
+        }
+
+        button.addEventListener('click', (e) => {
+            if (clickLocked) {
+                e.stopPropagation();
+                e.preventDefault();
+                return;
+            }
+
+            if (level === 0) {
+                level = 1;
+                button.textContent = 'Catch Me!';
+                const {x,y} = randomOnScreen(20);
+                placeButtonAt(x,y, false, 300);
+                lockClicks(400);
+                startIntermediate();
+            } 
+            else if (level === 1) {
+                level = 2;
+                if (intermediateInterval) { clearInterval(intermediateInterval); intermediateInterval = null; }
+                button.textContent = 'Try Harder!';
+                const {x,y} = randomOnScreen(10);
+                placeButtonAt(x,y, false, 220);
+                lockClicks(300);
+                startAdvanced();
+            } 
+            else if (level === 2) {
+                level = 3;
+                button.textContent = 'DIVINE CLICK';
+                const {x,y} = randomOnScreen(5);
+                placeButtonAt(x,y, false, 200);
+                lockClicks(400);
+                godLevelInterval = startGodLevel();
+            } 
+            else if (level === 3) {
+                showPraise();
+                setTimeout(() => {
+                    alert("🎉 Congrats!  IG: bhanuprasadchaparthy (^^)");
+                    if (godLevelInterval) { clearInterval(godLevelInterval); godLevelInterval = null; }
+                    document.removeEventListener('pointermove', onDocumentPointerMove);
+                    if (godPointerHandler) {
+                        document.removeEventListener('pointerdown', godPointerHandler);
+                        godPointerHandler = null;
+                    }
+                    resetGame();
+                }, 2500);
+            }
+
+            changeBackgroundColor();
+            changeButtonColor();
+        });
+
+        // Update resetGame to clear all intervals and handlers
+        function resetGame() {
+            if (intermediateInterval) { clearInterval(intermediateInterval); intermediateInterval = null; }
+            if (advancedJitterInterval) { clearInterval(advancedJitterInterval); advancedJitterInterval = null; }
+            if (godLevelInterval) { clearInterval(godLevelInterval); godLevelInterval = null; }
+            stopAdvanced();
+            document.removeEventListener('pointermove', onDocumentPointerMove);
+            if (godPointerHandler) {
+                document.removeEventListener('pointerdown', godPointerHandler);
+                godPointerHandler = null;
+            }
+            level = 0;
+            button.textContent = 'Click Me';
+            hint.style.background = '#fff8';
+            hint.style.color = '#444';
+            hint.style.fontWeight = 'normal';
+            button.style.position = 'absolute';
+            button.style.transform = 'scale(1)';
+            button.style.transition = 'background 0.25s ease, transform 0.18s ease, left 0.28s, top 0.28s';
+            hint.textContent = 'Level: Beginner — click the button';
+            centerButtonInstant();
+            changeBackgroundColor();
+            lockClicks(600);
+        }
+
+        window.addEventListener('resize', () => {
+            // keep position sensible on resize
+            const rect = button.getBoundingClientRect();
+            placeButtonAt(rect.left, rect.top, true);
+        });
+    </script>
+</body>
+</html>
