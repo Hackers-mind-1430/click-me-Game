@@ -16,10 +16,8 @@ A simple interactive browser game where players try to click a button that becom
 * CSS
 * JavaScript (Vanilla)
 
-## How to Run
-
-1. Clone the repository
-2. Open `index.html` in your browser
+## Check it out at
+https://click-me-game-five.vercel.app/
 
 ## Author
 
